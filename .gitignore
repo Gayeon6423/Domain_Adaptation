@@ -1,0 +1,127 @@
+# .gitignore for the [DA] repository
+# 목적: 데이터 용량이 큰 파일, 모델 가중치, 개인 정보(시크릿) 등을 Git에 올리지 않도록 설정
+
+# ----------------------
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ----------------------
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+/.mypy_cache/
+pip-wheel-metadata/
+
+# ----------------------
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+workspace/
+
+# ----------------------
+# Logs, outputs, experiments
+logs/
+log/
+*.log
+experiment/
+experiments/
+outputs/
+checkpoints/
+checkpoints_*/
+*.ckpt
+*.pth
+*.pt
+*.model
+*.bin
+
+# ----------------------
+# Data (대용량, 개인정보 포함될 수 있는 원천)
+# 기본적으로 모든 raw 데이터는 올리지 않습니다. 특정 파일만 추가하려면 예외 규칙(!)을 사용하세요.
+data/
+data_*/
+dataset/
+datasets/
+preliminary/**/data/
+
+# Large pretrained embeddings & models
+glove/
+*.vec
+*.npz
+InferSent/models/
+pretrained/
+model/
+models/
+/model/
+/models/
+
+# Transformer/huggingface caches
+transformers_cache/
+hf_transformers_cache/
+.cache/huggingface/
+*cache*/*transformers*
+
+# torch / cuda binaries sometimes downloaded as wheels
+*.whl
+
+# ----------------------
+# Secrets and credentials
+.env
+*.env
+secrets/
+secret-*
+credentials.json
+*.key
+*.pem
+id_rsa
+id_rsa.pub
+*.jks
+
+# ----------------------
+# Archives / packages / system files
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.rar
+*.7z
+
+# ----------------------
+# OS generated files
+desktop.ini
+ehthumbs.db
+
+# ----------------------
+# Notebook outputs and checkpoints
+# (if you want to keep some notebooks tracked, add exceptions e.g. !notebooks/keep_me.ipynb)
+*.nbconvert.ipynb
+
+# ----------------------
+# How to keep specific files you DO want to track
+# Example: track a small README dataset file
+# !data/small_dataset.csv
+
+# If you accidentally committed large files, use `git rm --cached <file>` to untrack after adding rules.
+*.pyc
+*.p
+*.pt
+*.pth
+.DS_Store
+
+/.ipynb_checkpoints/*
+/.vscode/*
+/experiment/*
+/experiments/*
+
+/data/*
