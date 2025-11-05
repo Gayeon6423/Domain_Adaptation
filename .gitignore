@@ -117,6 +117,7 @@ ehthumbs.db
 *.pt
 *.pth
 .DS_Store
+counterfitted_neighbors.json
 
 /.ipynb_checkpoints/*
 /.vscode/*
