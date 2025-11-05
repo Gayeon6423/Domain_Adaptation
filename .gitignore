@@ -27,7 +27,7 @@ pip-wheel-metadata/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 workspace/
-test_*/
+test_*.ipynb 
 
 # ----------------------
 # Logs, outputs, experiments
