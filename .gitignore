@@ -1,6 +1,4 @@
 # .gitignore for the [DA] repository
-# 목적: 데이터 용량이 큰 파일, 모델 가중치, 개인 정보(시크릿) 등을 Git에 올리지 않도록 설정
-
 # ----------------------
 # OS / editors
 .DS_Store
@@ -29,6 +27,7 @@ pip-wheel-metadata/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 workspace/
+test_*/
 
 # ----------------------
 # Logs, outputs, experiments
@@ -47,7 +46,7 @@ checkpoints_*/
 *.bin
 
 # ----------------------
-# Data (대용량, 개인정보 포함될 수 있는 원천)
+# Data 
 # 기본적으로 모든 raw 데이터는 올리지 않습니다. 특정 파일만 추가하려면 예외 규칙(!)을 사용하세요.
 data/
 data_*/
