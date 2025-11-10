@@ -29,7 +29,9 @@ def read_features_and_examples(args, file_name, tokenizer, logger, use_simple_fe
     if read_examples:
         try:
             examples = read_squad_examples(input_file=file_name, is_training=True, logger=logger)
-        except:
+        except Exception as e:
+            logger.info(f"read_squad_examples failed with error: {e}")
+            logger.info(f"Trying read_mrqa_examples instead...")
             examples = read_mrqa_examples(input_file=file_name, is_training=True, logger=logger)
     try:
         with open(cached_features_file, "rb") as reader:
@@ -179,11 +181,24 @@ def read_squad_examples(input_file, is_training, logger):
     """
     # JSONL 형식 체크 (파일 확장자 또는 첫 줄로 판단)
     if input_file.endswith('.jsonl'):
-        # JSONL 형식: 각 줄이 {"title": ..., "paragraphs": [...]}
+        # JSONL 형식: 각 줄이 {"title": ..., "paragraphs": [...]} 또는 MRQA 형식
         input_data = []
         with open(input_file, "r", encoding='utf-8') as reader:
             for line in reader:
-                input_data.append(json.loads(line))
+                line_data = json.loads(line)
+                # MRQA 형식인 경우 (context가 최상위에 있음)
+                if "context" in line_data and "paragraphs" not in line_data:
+                    # MRQA 형식을 SQuAD 형식으로 변환
+                    input_data.append({
+                        "title": line_data.get("id", "unknown"),
+                        "paragraphs": [{
+                            "context": line_data["context"],
+                            "qas": line_data["qas"]
+                        }]
+                    })
+                else:
+                    # 기존 SQuAD JSONL 형식
+                    input_data.append(line_data)
     else:
         # JSON 형식: {"data": [{"title": ..., "paragraphs": [...]}]}
         with open(input_file, "r", encoding='utf-8') as reader:
@@ -219,7 +234,8 @@ def read_squad_examples(input_file, is_training, logger):
                 char_to_word_offset.append(len(doc_tokens) - 1)
 
             for qa in paragraph["qas"]:
-                qas_id = qa["id"]
+                # MRQA 형식은 "qid", SQuAD 형식은 "id" 사용
+                qas_id = qa.get("id") or qa.get("qid")
                 question_text = qa["question"]
                 start_position = None
                 end_position = None
