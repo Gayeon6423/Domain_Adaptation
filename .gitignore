@@ -52,6 +52,7 @@ data/
 data_*/
 dataset/
 datasets/
+results/
 preliminary/**/data/
 
 # Large pretrained embeddings & models
@@ -64,6 +65,8 @@ model/
 models/
 /model/
 /models/
+checkpoints/
+checkpoint_*/
 
 # Transformer/huggingface caches
 transformers_cache/
