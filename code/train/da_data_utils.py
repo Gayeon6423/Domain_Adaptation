@@ -6,7 +6,6 @@ import re
 import string
 import sys
 from copy import deepcopy
-
 import pickle
 import json_lines
 import numpy as np
@@ -249,30 +248,44 @@ def read_squad_examples(input_file, is_training, logger):
                     q_type_prob = None
                 orig_answer_text = None
                 answers = None
+                # If training data provides answers, extract them. If not (unlabeled data),
+                # keep answer fields None so examples can still be created for prediction/self-training.
                 if is_training:
-                    # if len(qa["answers"]) != 1:
-                    #     raise ValueError(
-                    #         "For training, each question should have exactly 1 answer.")
-                    answer = qa["answers"][0]
-                    orig_answer_text = answer["text"]
-                    answer_offset = answer["answer_start"]
-                    answer_length = len(orig_answer_text)
-                    start_position = char_to_word_offset[answer_offset]
-                    end_position = char_to_word_offset[answer_offset + answer_length - 1]
-                    answers = list(map(lambda x: x['text'], qa['answers']))
-                    # Only add answers where the text can be exactly recovered from the
-                    # document. If this CAN'T happen it's likely due to weird Unicode
-                    # stuff so we will just skip the example.
-                    #
-                    # Note that this means for training mode, every example is NOT
-                    # guaranteed to be preserved.
-                    actual_text = " ".join(doc_tokens[start_position:(end_position + 1)])
-                    cleaned_answer_text = " ".join(
-                        whitespace_tokenize(orig_answer_text))
-                    if actual_text.find(cleaned_answer_text) == -1:
-                        # logger.warning("Could not find answer: '%s' vs. '%s'",
-                        #                    actual_text, cleaned_answer_text)
-                        continue
+                    if 'answers' in qa and qa['answers'] and isinstance(qa['answers'], list):
+                        try:
+                            answer = qa['answers'][0]
+                            orig_answer_text = answer.get('text')
+                            answer_offset = answer.get('answer_start')
+                            if orig_answer_text is not None and answer_offset is not None:
+                                answer_length = len(orig_answer_text)
+                                # guard against out-of-bounds offsets
+                                if answer_offset + answer_length - 1 < len(char_to_word_offset):
+                                    start_position = char_to_word_offset[answer_offset]
+                                    end_position = char_to_word_offset[answer_offset + answer_length - 1]
+                                    answers = list(map(lambda x: x.get('text'), qa['answers']))
+                                    actual_text = " ".join(doc_tokens[start_position:(end_position + 1)])
+                                    cleaned_answer_text = " ".join(whitespace_tokenize(orig_answer_text))
+                                    if actual_text.find(cleaned_answer_text) == -1:
+                                        # If the extracted span does not match, skip this example
+                                        continue
+                                else:
+                                    # answer span out of bounds, treat as unlabeled example
+                                    orig_answer_text = None
+                                    answers = None
+                                    start_position = None
+                                    end_position = None
+                        except Exception:
+                            # any parsing error -> treat as unlabeled example
+                            orig_answer_text = None
+                            answers = None
+                            start_position = None
+                            end_position = None
+                    else:
+                        # no answers provided (unlabeled target data) -> leave answer fields None
+                        orig_answer_text = None
+                        answers = None
+                        start_position = None
+                        end_position = None
 
                 example = SquadExample(
                     qas_id=qas_id,
@@ -315,9 +328,9 @@ def read_mrqa_examples(input_file, is_training, logger, train_qid_list=None):
     for paragraph_index, paragraph in enumerate(tqdm(paragraphs)):
         # if paragraph_index == 1000:
         #     break
-        #if is_training and paragraph_index not in chosen_paragraph_indices:
-        #    continue
-        paragraph_text = paragraph["context"]
+        # if is_training and paragraph_index not in chosen_paragraph_indices:
+        #     continue
+        paragraph_text = paragraph.get("context", "")
         doc_tokens = []
         char_to_word_offset = []
         prev_is_whitespace = True
@@ -333,7 +346,7 @@ def read_mrqa_examples(input_file, is_training, logger, train_qid_list=None):
             char_to_word_offset.append(len(doc_tokens) - 1)
         #pdb.set_trace()
         for qa in paragraph["qas"]:
-            qas_id = qa["qid"]
+            qas_id = qa.get("qid")
             if train_qid_list:
                 if qas_id not in train_qid_list:
                     continue
@@ -356,9 +369,11 @@ def read_mrqa_examples(input_file, is_training, logger, train_qid_list=None):
                 #    import pdb
                 #    pdb.set_trace()
                 #    raise ValueError("For training, each question should have exactly one answer.")
-                answer = qa["detected_answers"][0]
-                orig_answer_text = answer["text"]
-                answer_offset = answer["char_spans"][0][0]
+                if 'detected_answers' in qa and qa['detected_answers']:
+                    answer = qa['detected_answers'][0]
+                    orig_answer_text = answer.get('text')
+                    char_spans = answer.get('char_spans', [])
+                    answer_offset = char_spans[0][0] if char_spans else None
                 answer_length = len(orig_answer_text)
                 start_position = char_to_word_offset[answer_offset]
                 answers = [answer['text'] for answer in qa["detected_answers"]]
@@ -429,7 +444,11 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
         tok_start_position = None
         tok_end_position = None
-        if is_training:  # 학습 모드일 때만 정답 위치 매핑
+        # Determine whether this example has training labels (answers). Some datasets
+        # (e.g., unlabeled target data) may have examples without answers; in that
+        # case we should treat them as non-training examples for span mapping.
+        is_training_example = is_training and (example.start_position is not None) and (example.end_position is not None) and (example.orig_answer_text is not None)
+        if is_training_example:  # 학습 모드일 때만 정답 위치 매핑
             tok_start_position = orig_to_tok_index[example.start_position]
             if example.end_position < len(example.doc_tokens) - 1:
                 tok_end_position = orig_to_tok_index[example.end_position + 1] - 1
@@ -511,16 +530,17 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
             start_position = None
             end_position = None
-            if is_training:  # 학습 모드라면 정답 위치 계산
+            # Only compute start/end positions for examples that actually have labels.
+            if is_training_example:
                 doc_start = doc_span.start
                 doc_end = doc_span.start + doc_span.length - 1
-                # 정답이 현재 span에 포함되지 않으면 스킵
+                # If the answer is not fully inside this span, skip the feature.
                 if (example.start_position < doc_start or
                         example.end_position < doc_start or
                         example.start_position > doc_end or example.end_position > doc_end):
                     continue
 
-                # 질문 + [CLS], [SEP] 만큼 오프셋을 고려하여 실제 위치 보정
+                # account for question + [CLS], [SEP]
                 doc_offset = len(query_tokens) + 2
                 start_position = tok_start_position - doc_start + doc_offset
                 end_position = tok_end_position - doc_start + doc_offset
@@ -541,7 +561,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     "input_mask: %s" % " ".join([str(x) for x in input_mask]))
                 logger.info(
                     "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-                if is_training:
+                if is_training_example and start_position is not None and end_position is not None:
                     answer_text = " ".join(tokens[start_position:(end_position + 1)])
                     logger.info("start_position: %d" % (start_position))
                     logger.info("end_position: %d" % (end_position))

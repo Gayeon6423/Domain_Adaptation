@@ -48,55 +48,34 @@ def open_json(path):
         input_data = json.load(f)["data"]
         # input_data = input_data[:5]  ################ debug size ################
     return input_data
-
-def update_qtype_prob(fpath, q_type, q_type_prob, q_ids):
-    # JSON 파일 로드
-    with io.open(fpath, 'r', encoding='utf-8') as f:
-        input_data = json.load(f)["data"]
-        input_data = input_data[:5] ################ debug size ################
-    # 각 질문에 대해 분류 결과를 추가
-    total_idx = 0
-    for entry in input_data:
-        for paragraph in entry["paragraphs"]:
-            for qa in paragraph['qas']:
-                # 예측된 질문 유형과 유형 확률값을 해당 질문에 추가
-                if qa['id'] == q_ids[total_idx]:
-                    qa['q_type'] = q_type[total_idx]
-                    qa['q_type_prob'] = q_type_prob[total_idx]
-                    total_idx += 1
-                else:
-                    # 질문 ID가 맞지 않으면 경고 출력
-                    print('Can not match qid:', q_ids[total_idx])
                     
-def update_file(fpath, q_type, q_type_prob, q_ids):
+def return_qa_qa_ids(fpath):
     """
-    기존 파일에 질문 유형(q_type)과 질문 유형 확률(q_type_prob)을 추가하는 함수
-    * format은 squad 형식으로 통합 *
+    데이터 파일을 읽어 질문과 질문 ID를 추출
+    tgt2idx = {'ABBR': 0, 'DESC': 1, 'ENTY': 2,'HUM': 3, 'LOC': 4, 'NUM': 5}
     """
+    qa_data = []
+    qa_ids = []
 
-    # JSON 파일 처리(Ex.SQuAD)
-    with io.open(fpath, 'r', encoding='utf-8') as f:
-        input_data = json.load(f)["data"]
-        input_data = input_data[:5] ################ debug size ################
-    # 각 질문에 대해 분류 결과를 추가
-    total_idx = 0
-    for entry in input_data:
+    if fpath.endswith('.jsonl'):
+    # JSONL 파일 처리(Ex.HotPot)
+        data = []
+        with io.open(fpath, 'r', encoding='utf-8') as f:
+            for example in f:
+                data.append(json.loads(example))
+        data = data[:5] ################ debug size ################
+    elif fpath.endswith('.json'):
+        # JSON 파일 처리(Ex.SQuAD, CNN)
+        with io.open(fpath, 'r', encoding='utf-8') as f:
+            data = json.load(f)["data"]
+            data = data[:5] ################ debug size ################
+    
+    for entry in data:
         for paragraph in entry["paragraphs"]:
-            for qa in paragraph['qas']:
-                # 예측된 질문 유형과 유형 확률값을 해당 질문에 추가
-                if qa['id'] == q_ids[total_idx]:
-                    qa['q_type'] = q_type[total_idx]
-                    qa['q_type_prob'] = q_type_prob[total_idx]
-                    total_idx += 1
-                else:
-                    # 질문 ID가 맞지 않으면 경고 출력
-                    print('Can not match qid:', q_ids[total_idx])
-        
-    # 새로운 파일로 저장 (원본 파일명.json->_qtype_prob.jsonl)
-    with open(fpath[:-5]+'_qtype_prob.jsonl', 'w') as f:
-        for sample in input_data:
-            f.write(json.dumps(sample)+'\n')
-    f.close()
+            for qa in paragraph["qas"]:
+                qa_data.append(qa['question'])
+                qa_ids.append(qa['id'])
+    return qa_data, qa_ids
         
 
 def parse_custom_data(raw_data):

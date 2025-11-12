@@ -1,47 +1,20 @@
-import os
+# Common imports
+import sys
+sys.path.append('../utils')
+from common_imports import *
+
+# Additional imports
+from da_data_utils import * 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
 os.environ["CUDA_VISIBLE_DEVICES"]="3"
-
-from abc import ABCMeta
-import argparse
-import datetime 
-import collections
-from collections import defaultdict
-import json
-import math
-import os
-import random
-import pickle
-import sys
-import io
-from tqdm import tqdm, trange
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
-
-import numpy as np
-import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler, WeightedRandomSampler
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn import CrossEntropyLoss
-from pathlib import Path
-from collections import Counter
-
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.modeling import BertForQuestionAnswering
-# from pytorch_pretrained_bert.modeling import BertForQuestionAnsweringQC4QA
 from pytorch_pretrained_bert.modeling import BertForQuestionAnsweringWeightQCQA
-
 from pytorch_pretrained_bert.optimization import BertAdam
-from utils.ConfigLogger import config_logger
-from utils.evaluate import f1_score, exact_match_score, metric_max_over_ground_truths
-from utils.BERTRandomSampler import BERTRandomSampler
-
 PYTORCH_PRETRAINED_BERT_CACHE = Path(os.getenv('PYTORCH_PRETRAINED_BERT_CACHE',
                                                Path.home() / '.pytorch_pretrained_bert'))
 
-from da_data_utils import * 
-
-import importlib, types, argparse
-from utils.ConfigLogger import config_logger
 
 def prediction_stage(args, device, tokenizer, logger, debug=False):
     # Load a trained model that you have fine-tuned

@@ -65,6 +65,7 @@ model/
 models/
 /model/
 /models/
+checkpoint/
 checkpoints/
 checkpoint_*/
 

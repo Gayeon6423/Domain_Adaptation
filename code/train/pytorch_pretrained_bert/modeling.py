@@ -1415,6 +1415,261 @@ class BertForQuestionAnsweringQC4QA(PreTrainedBertModel):
         else:
             return start_logits, end_logits, sequence_output
 
+class BertForQuestionAnsweringWeightQCQA(PreTrainedBertModel):
+    """BERT model for Question Answering with Weighted QC4QA (Probability-based weighting).
+    This module extends BertForQuestionAnsweringQC4QA by using q_type_prob for weighted alignment.
+
+    Key differences from BertForQuestionAnsweringQC4QA:
+    - Uses q_type_prob (probability distribution) instead of hard q_type assignment
+    - Weighted average for type-specific representations
+    - Type importance weighting based on probability
+
+    Params:
+        `config`: a BertConfig class instance with the configuration to build a new model.
+    """
+    def __init__(self, config):
+        super(BertForQuestionAnsweringWeightQCQA, self).__init__(config)
+        self.bert = BertModel(config)
+        if config.use_BN:
+            self.norm_layer = torch.nn.BatchNorm1d(config.max_seq_length)
+        self.use_BN = config.use_BN
+        self.qa_outputs = nn.Linear(config.hidden_size, 2)
+        self.apply(self.init_bert_weights)
+
+    def guassian_kernel(self, source, target, kernel_mul=2.0, kernel_num=5, fix_sigma=None):
+        n_samples = int(source.size()[0])+int(target.size()[0])
+        total = torch.cat([source, target], dim=0)
+
+        total0 = total.unsqueeze(0).expand(int(total.size(0)), int(total.size(0)), int(total.size(1)))
+        total1 = total.unsqueeze(1).expand(int(total.size(0)), int(total.size(0)), int(total.size(1)))
+        l2_distance = ((total0-total1)**2).sum(2)
+
+        if fix_sigma:
+            bandwidth = fix_sigma
+        else:
+            bandwidth = torch.sum(l2_distance.data) / (n_samples**2-n_samples)
+        bandwidth /= kernel_mul ** (kernel_num // 2)
+        bandwidth_list = [bandwidth * (kernel_mul**i) for i in range(kernel_num)]
+
+        kernel_val = [torch.exp(-l2_distance / bandwidth_temp) for bandwidth_temp in bandwidth_list]
+        return sum(kernel_val)
+
+    def mmd(self, source, target, kernel_mul=2.0, kernel_num=5, fix_sigma=None):
+        if len(source.shape) <= 1:
+            source = source.unsqueeze(0)
+        if len(target.shape) <= 1:
+            target = target.unsqueeze(0)
+        batch_size = int(source.size()[0])
+        kernels = self.guassian_kernel(source, target, kernel_mul=kernel_mul, kernel_num=kernel_num, fix_sigma=fix_sigma)
+        XX = kernels[:batch_size, :batch_size]
+        YY = kernels[batch_size:, batch_size:]
+        XY = kernels[:batch_size, batch_size:]
+        YX = kernels[batch_size:, :batch_size]
+        loss = torch.mean(XX) + torch.mean(YY) - torch.mean(XY) - torch.mean(YX)
+        return loss
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None,
+                end_positions=None, combine_train=False):
+        sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
+        if self.use_BN:
+            sequence_output = self.norm_layer(sequence_output)
+        logits = self.qa_outputs(sequence_output)
+        start_logits, end_logits = logits.split(1, dim=-1)
+        start_logits = start_logits.squeeze(-1)
+        end_logits = end_logits.squeeze(-1)
+
+        if start_positions is not None and end_positions is not None:
+            if len(start_positions.size()) > 1:
+                start_positions = start_positions.squeeze(-1)
+            if len(end_positions.size()) > 1:
+                end_positions = end_positions.squeeze(-1)
+            ignored_index = start_logits.size(1)
+            start_positions.clamp_(0, ignored_index)
+            end_positions.clamp_(0, ignored_index)
+            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            if combine_train:
+                start_loss = loss_fct(start_logits[:start_positions.size(0)], start_positions)
+                end_loss = loss_fct(end_logits[:end_positions.size(0)], end_positions)
+                total_loss = (start_loss + end_loss) / 2
+                return start_logits, end_logits, sequence_output, total_loss
+            else:
+                start_loss = loss_fct(start_logits, start_positions)
+                end_loss = loss_fct(end_logits, end_positions)
+                total_loss = (start_loss + end_loss) / 2
+                return total_loss
+        else:
+            return start_logits, end_logits, sequence_output
+
+    def forward_ours(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None,
+                     end_positions=None, q_types=None, q_type_probs=None, lambda_c=0.):
+        """
+        Forward pass with Weighted QC4QA loss.
+
+        Args:
+            q_type_probs: [batch_size, 6] tensor of question type probabilities
+                         Used for weighted alignment instead of hard q_type
+        """
+        sequence_output, avg_attn_weights = self.bert.forward_ours(input_ids, token_type_ids, attention_mask, synonym_ids=None, synonym_coeffs=None,
+                                                                   cutoff_mask=None, cutoff_ratio=0., output_all_encoded_layers=False)
+        if self.use_BN:
+            sequence_output = self.norm_layer(sequence_output)
+        logits = self.qa_outputs(sequence_output)
+        start_logits, end_logits = logits.split(1, dim=-1)
+        start_logits = start_logits.squeeze(-1)
+        end_logits = end_logits.squeeze(-1)
+
+        if start_positions is not None and end_positions is not None:
+            if len(start_positions.size()) > 1:
+                start_positions = start_positions.squeeze(-1)
+            if len(end_positions.size()) > 1:
+                end_positions = end_positions.squeeze(-1)
+            ignored_index = start_logits.size(1)
+            start_positions.clamp_(0, ignored_index)
+            end_positions.clamp_(0, ignored_index)
+            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+
+            # find answer, context and question position mask
+            a_mask_1 = torch.zeros(token_type_ids.shape[0], token_type_ids.shape[1]+1).to(token_type_ids.device)
+            a_mask_1[torch.arange(a_mask_1.shape[0]), start_positions] = 1
+            a_mask_1 = a_mask_1.cumsum(dim=1)[:, :-1]
+            a_mask_2 = torch.zeros(token_type_ids.shape[0], token_type_ids.shape[1]+2).to(token_type_ids.device)
+            a_mask_2[torch.arange(a_mask_2.shape[0]), end_positions+1] = 1
+            a_mask_2 = a_mask_2.cumsum(dim=1)[:, :-2]
+            a_mask = a_mask_1 * (1 - a_mask_2)
+            cq_mask = torch.ones_like(a_mask).to(token_type_ids.device) - a_mask
+
+            valid_bool = (start_positions != 0).float() * (start_positions != ignored_index).float() * \
+                (end_positions != 0).float() * (end_positions != ignored_index).float()
+            valid_idx = valid_bool.nonzero().squeeze()
+            valid_source_idx = valid_bool[:input_ids.size(0)//2].nonzero().squeeze()
+            valid_target_idx = valid_bool[input_ids.size(0)//2:].nonzero().squeeze()
+
+            if valid_idx.nelement() > 0:
+                a_attn_weights = avg_attn_weights.masked_fill(a_mask==0, -1e9)
+                a_attn_probs = nn.functional.softmax(a_attn_weights, dim=-1)
+                cq_attn_weights = avg_attn_weights.masked_fill(cq_mask==0, -1e9)
+                cq_attn_probs = nn.functional.softmax(cq_attn_weights, dim=-1)
+                rep = sequence_output[valid_idx]
+                if valid_idx.nelement() == 1:
+                    rep = rep.unsqueeze(0)
+                a_rep = (rep * a_attn_probs[valid_idx].reshape(rep.size()[:2]).unsqueeze(-1)).sum(1)
+                cq_rep = (rep * cq_attn_probs[valid_idx].reshape(rep.size()[:2]).unsqueeze(-1)).sum(1)
+                caqa_loss = -self.mmd(cq_rep, a_rep)
+            if valid_source_idx.nelement() > 0 and valid_target_idx.nelement() > 0:
+                valid_target_idx = valid_target_idx + input_ids.size(0) // 2
+                rep_source = sequence_output[valid_source_idx]
+                if valid_source_idx.nelement() == 1:
+                    rep_source = rep_source.unsqueeze(0)
+                a_rep_source = (rep_source * a_attn_probs[valid_source_idx].reshape(rep_source.size()[:2]).unsqueeze(-1)).sum(1)
+                cq_rep_source = (rep_source * cq_attn_probs[valid_source_idx].reshape(rep_source.size()[:2]).unsqueeze(-1)).sum(1)
+                rep_target = sequence_output[valid_target_idx]
+                if valid_target_idx.nelement() == 1:
+                    rep_target = rep_target.unsqueeze(0)
+                a_rep_target = (rep_target * a_attn_probs[valid_target_idx].reshape(rep_target.size()[:2]).unsqueeze(-1)).sum(1)
+                cq_rep_target = (rep_target * cq_attn_probs[valid_target_idx].reshape(rep_target.size()[:2]).unsqueeze(-1)).sum(1)
+                caqa_loss += self.mmd(a_rep_source, a_rep_target) + self.mmd(cq_rep_source, cq_rep_target)
+
+            # ============================================================
+            # Weighted QC4QA Loss (Using q_type_probs)
+            # ============================================================
+            qc4qa_loss = 0
+            total_types = 0
+
+            if q_type_probs is not None:
+                # Split source and target probabilities
+                half_batch = q_types.size(0) // 2
+                q_type_probs_source = q_type_probs[:half_batch]  # [batch_source, 6]
+                q_type_probs_target = q_type_probs[half_batch:]  # [batch_target, 6]
+
+                # Threshold for filtering (ignore very low probabilities)
+                prob_threshold = 0.01
+
+                # Iterate through all question types
+                for q_type in range(6):
+                    # Extract probabilities for this type
+                    source_weights = q_type_probs_source[:, q_type]  # [batch_source]
+                    target_weights = q_type_probs_target[:, q_type]  # [batch_target]
+
+                    # Create masks: valid samples with prob > threshold
+                    # source_mask = (source_weights > prob_threshold) & valid_bool[:half_batch]
+                    # target_mask = (target_weights > prob_threshold) & valid_bool[half_batch:]
+                    source_mask = (source_weights > prob_threshold) * valid_bool[:half_batch]
+                    target_mask = (target_weights > prob_threshold) * valid_bool[half_batch:]
+
+                    if source_mask.sum() > 0 and target_mask.sum() > 0:
+                        # Get answer representations for samples above threshold
+                        source_type_idx = source_mask.nonzero().squeeze()
+                        target_type_idx = target_mask.nonzero().squeeze() + half_batch
+
+                        if source_type_idx.numel() == 0 or target_type_idx.numel() == 0:
+                            continue
+
+                        # Handle single element case
+                        if source_type_idx.numel() == 1:
+                            source_type_idx = source_type_idx.unsqueeze(0)
+                        if target_type_idx.numel() == 1:
+                            target_type_idx = target_type_idx.unsqueeze(0)
+
+                        # Compute answer representations
+                        a_type_source = (sequence_output[source_type_idx] * a_mask[source_type_idx].unsqueeze(-1)).sum(1) / a_mask[source_type_idx].sum(-1).unsqueeze(-1)
+                        a_type_target = (sequence_output[target_type_idx] * a_mask[target_type_idx].unsqueeze(-1)).sum(1) / a_mask[target_type_idx].sum(-1).unsqueeze(-1)
+
+                        # Apply probability weights to create weighted representations
+                        source_weights_valid = source_weights[source_type_idx]
+                        target_weights_valid = target_weights[target_type_idx - half_batch]
+
+                        # Weighted average: sum(rep * weight) / sum(weight)
+                        a_source_weighted = (a_type_source * source_weights_valid.unsqueeze(-1)).sum(0) / source_weights_valid.sum()
+                        a_target_weighted = (a_type_target * target_weights_valid.unsqueeze(-1)).sum(0) / target_weights_valid.sum()
+
+                        # Type importance (average probability across source and target)
+                        type_importance = (source_weights.mean() + target_weights.mean()) / 2
+
+                        # Weighted MMD
+                        try:
+                            qc4qa_loss += type_importance * self.mmd(
+                                a_source_weighted.unsqueeze(0),
+                                a_target_weighted.unsqueeze(0)
+                            )
+                            total_types += 1
+                        except:
+                            qc4qa_loss = type_importance * self.mmd(
+                                a_source_weighted.unsqueeze(0),
+                                a_target_weighted.unsqueeze(0)
+                            )
+                            total_types += 1
+            else:
+                # Fallback to original QC4QA (hard assignment) if q_type_probs not provided
+                unique_q_types = torch.unique(q_types)
+                for q_type in unique_q_types:
+                    source_type_idx = ((q_types==q_type) * valid_bool)[:q_types.size(0)//2].nonzero().squeeze()
+                    target_type_idx = ((q_types==q_type) * valid_bool)[q_types.size(0)//2:].nonzero().squeeze() + q_types.size(0)//2
+                    if source_type_idx.numel() > 0 and target_type_idx.numel() > 0:
+                        if source_type_idx.numel() == 1:
+                            source_type_idx = source_type_idx.unsqueeze(0)
+                        if target_type_idx.numel() == 1:
+                            target_type_idx = target_type_idx.unsqueeze(0)
+                        a_type_source = (sequence_output[source_type_idx] * a_mask[source_type_idx].unsqueeze(-1)).sum(1) / a_mask[source_type_idx].sum(-1).unsqueeze(-1)
+                        a_type_target = (sequence_output[target_type_idx] * a_mask[target_type_idx].unsqueeze(-1)).sum(1) / a_mask[target_type_idx].sum(-1).unsqueeze(-1)
+                        try:
+                            qc4qa_loss += self.mmd(a_type_source, a_type_target)
+                            total_types += 1
+                        except:
+                            qc4qa_loss = self.mmd(a_type_source, a_type_target)
+                            total_types += 1
+
+            start_loss = loss_fct(start_logits[:start_positions.size(0)], start_positions)
+            end_loss = loss_fct(end_logits[:end_positions.size(0)], end_positions)
+            total_loss = (start_loss + end_loss) / 2
+            if valid_idx.nelement() > 0:
+                total_loss += lambda_c * caqa_loss
+            if total_types > 0:
+                total_loss += lambda_c * qc4qa_loss
+            return total_loss
+        else:
+            return start_logits, end_logits, sequence_output
+
+
 
 class BertForQuestionAnsweringQADA(PreTrainedBertModel):
     """BERT model for Question Answering (span extraction) with batch normalization.
