@@ -50,7 +50,8 @@ from utils.BERTRandomSampler import BERTRandomSampler
 PYTORCH_PRETRAINED_BERT_CACHE = Path(os.getenv('PYTORCH_PRETRAINED_BERT_CACHE',
                                                Path.home() / '.pytorch_pretrained_bert'))
 
-from data_utils import *
+# from data_utils import *
+from da_data_utils import *
 from qada_utils import *
 
 
@@ -272,7 +273,7 @@ def comb_adversarial_training_stage(args, target_train_features, target_train_ex
     model.train()
     for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
         input_ids, input_masks, segment_ids, start_positions, end_positions, synonym_ids, synonym_coeffs = batch
-        batch_source = source_data_iter.next()
+        batch_source = next(source_data_iter)
         input_ids_source, input_masks_source, segment_ids_source, start_positions_source, end_positions_source, \
             synonym_ids_source, synonym_coeffs_source = batch_source
         input_ids = torch.cat((input_ids, input_ids_source), 0).to(device)
@@ -458,7 +459,7 @@ def main(debug=False):
     parser.add_argument("--use_BN", default=True, help="Whether to use Batch Normalization in the output layer.")
     parser.add_argument("--output_prediction", action='store_true', help="Whether to output the prediction json file.")
 
-    parser.add_argument("--synonym_file", default='./src/counterfitted_neighbors.json', type=str, help="Synonym file for augmentation")
+    parser.add_argument("--synonym_file", default='counterfitted_neighbors.json', type=str, help="Synonym file for augmentation")
     parser.add_argument("--max_synonyms", default=10, type=int, help="Maximum number of synonyms used for augmentation")
     parser.add_argument('--alpha', type=float, default=1.0, help="QADA: Alpha for Dirichlet sampling process")
     parser.add_argument('--decay', type=float, default=0.1, help="QADA: Decay for Dirichlet sampling process")
